@@ -1,0 +1,227 @@
+---
+title: "HW5"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load required packages:
+```{r load}
+library(rvest)
+library(factoextra)
+library(fastICA)
+library(graphics)
+library(ggplot2)
+library(scatterplot3d)
+library(nFactors)
+```
+
+# Q1 Parkinson's Disease example
+Import and prepare parkinson disease data:
+```{r import}
+wiki_url = read_html("http://wiki.socr.umich.edu/index.php/SOCR_Data_PD_BiomedBigMetadata")
+html_nodes(wiki_url, "#content")
+pd_data = html_table(html_nodes(wiki_url, "table")[[1]])
+pd_data = data.frame(pd_data)
+```
+Change the "Dx" to numerical, and delete the time and case no. columns:
+```{r prepare}
+pd_data$Dx = gsub("PD", 1, pd_data$Dx)
+pd_data$Dx = gsub("HC", 0, pd_data$Dx)
+pd_data$Dx = gsub("SWEDD", 0, pd_data$Dx)
+pd_data$Dx = as.numeric(pd_data$Dx)
+
+pd_0 = pd_data[, -c(1, 33)]
+summary(pd_0)
+```
+
+PCA
+```{r PCA}
+pd.pca = princomp(pd_0, cor = T)
+summary(pd.pca)
+```
+From the cumulative proportion of variance, 26 principal components can explain over 90% of the variance, so PCA does not work well.
+
+Plot the principal components and the biplot:
+```{r pca plot}
+plot(pd.pca)
+biplot(pd.pca)
+```
+
+SVD
+```{r SVD}
+df = nrow(pd_0) - 1
+zvars = scale(pd_0)
+z.svd = svd(zvars)
+```
+d from SVD and eigen values from PCA are the same:
+```{r d and eigenval}
+z.svd$d/sqrt(df)
+pd.pca$sdev
+```
+v from SVD and eigen vectors from PCA are the same:
+```{r v and eigenvec}
+z.svd$v[1:10,1:10]
+pd.pca$loadings[1:10,1:10]
+```
+
+ICA
+First we calculate the correlation of the data matrix:
+```{r cor}
+cor(pd_0)[1:10,1:10]
+``` 
+The data show low correlation, so not suitable for ICA. But as a practice:
+```{r ICA}
+pd.ica = fastICA(pd_0, 2, alg.typ = "parallel", fun = "logcosh", alpha = 1, 
+                 method = "C", row.norm = T, maxit = 200, 
+                 tol = 0.0001)
+```
+We can then plot the two ICA components and show the new correlation matrix of the two components:
+```{r ICA plot}
+plot(pd.ica$S, main = "ICA components")
+cor(pd.ica$S)
+```
+
+FA
+```{r FA}
+pd.fa = factanal(pd_0, 19, rotation = "varimax")
+pd.fa
+```
+We can see that 19 factors pass the chi square test for sufficient number of factors at 0.78 level.
+
+# Q2 Allometric Relations in Plants example
+
+Load data, using the "Boreal/temperate Larix forest" dataset:
+```{r}
+wiki_url = read_html("http://wiki.stat.ucla.edu/socr/index.php/SOCR_Data_Dinov_032708_AllometricPlanRels")
+html_nodes(wiki_url, "#content")
+pl_data = html_table(html_nodes(wiki_url, "table")[[2]])
+pl_data = data.frame(pl_data)
+```
+Delete the sites column since the information is included in the altitudes and latitudes. Also delete the "Born" columns since all have the same content.
+```{r}
+pl_raw = pl_data
+pl_data = pl_data[,-c(1,5)]
+```
+Generate a data summary:
+```{r}
+head(pl_data)
+summary(pl_data)
+```
+Apply prcomp and report the rotations (scores). Data is scaled.
+```{r}
+pl.pca = prcomp(pl_data, scale. = T)
+summary(pl.pca)
+pl.pca
+```
+Display screen plot:
+```{r}
+plot(pl.pca)
+```
+Noticed that 4 principal components explain 98.8% of the variance, so choose 4 pc. Now employ a bootstrap test:
+```{r}
+set.seed(2017)
+num_boot = 1000
+bootstrap_it = function(i) {
+  data_resample = pl_data[sample(1:nrow(pl_data), nrow(pl_data), replace=TRUE),] 
+  p_resample = prcomp(data_resample, scale. = T) 
+  return(sum(p_resample$sdev[1:4]^2)/sum(p_resample$sdev^2))
+  }
+pco = data.frame(per=sapply(1:num_boot, bootstrap_it)) 
+quantile(pco$per, probs = c(0.025,0.975))  # specify 95-th % Confidence Interval
+
+corpp = sum(pl.pca$sdev[1:4]^2)/sum(pl.pca$sdev^2)
+plot = ggplot(pco, aes(x=pco$per)) +
+  geom_histogram(bins = 50) + geom_vline(xintercept=corpp, color='yellow')+ 
+  labs(title = "Percent Var Explained by the first 4 PCs") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  labs(x='perc of var')
+show(plot)
+```
+Apply factoextra to draw biplot and grouped by Province/Sites:
+```{r}
+qualit_vars = as.factor(pl_raw$Province.Sites)
+fviz_pca_biplot(pl.pca, axes = c(1, 2), geom = c("point", "text"),
+  col.ind = "black", col.var = "steelblue", label = "all",
+  invisible = "none", repel = T, habillage = qualit_vars, 
+  palette = NULL, addEllipses = TRUE, title = "PCA - Biplot")
+```
+Perform SVD and compare the results of PCA.
+SVD:
+```{r}
+df = nrow(pl_data) - 1
+zvars = scale(pl_data)
+z.svd = svd(zvars)
+```
+d from SVD and eigen values from PCA are the same:
+```{r}
+z.svd$d/sqrt(df)
+```
+```{r}
+pl.pca$sdev
+```
+v from SVD and eigen vectors from PCA are the same:
+```{r}
+z.svd$v
+```
+```{r}
+pl.pca$rotation
+```
+Use these three variables L, M, D to perform ICA and show pair plots before ICA and after ICA. 
+Scatter plot before ICA:
+```{r}
+pl.sub = pl_data[,4:6]
+scatterplot3d(pl.sub)
+```
+Scatter plot after ICA:
+```{r}
+pl.ica = fastICA(pl.sub, 3, alg.typ = "parallel", fun = "logcosh", alpha = 1, 
+                 method = "C", row.norm = T, maxit = 200, tol = 0.0001)
+scatterplot3d(pl.ica$S, main = "ICA components")
+```
+We can see that ICA components are more indepedent except one pair.
+The correlation of PCs from PCA are:
+```{r}
+plsub.pca = prcomp(pl.sub, scale. = T)
+cor(plsub.pca$rotation)
+```
+While the correlation of the components from ICA are:
+```{r}
+cor(pl.ica$S)
+```
+PCA and ICA both have 2 components that are very correlated, implying that only 2 components are enough.
+
+Factor analysis
+Use require(nFactors) to determine the number of the factors and show a scree plot as stated in notes
+```{r}
+ev = eigen(cor(pl_data)) # get eigenvalues
+ap = parallel(subject=nrow(pl_data), var=ncol(pl_data), rep=100, cent=.05)
+nS = nScree(x=ev$values, aparallel=ap$eigen$qevpea)
+summary(nS)
+```
+```{r}
+plotnScree(nS)
+```
+So the number of factors is determined to be 2.
+Use factanal() to apply FA. When rotation =  varimax:
+```{r}
+pl.favar = factanal(pl_data, 2, rotation = "varimax")
+pl.favar
+```
+When rotation = promax:
+```{r}
+pl.fapro = factanal(pl_data, 2, rotation = "promax")
+pl.fapro
+```
+Loadings are shown in both fa results. We get similar results.
+Visualizing the results (use result from varimax):
+```{r}
+load = pl.favar$loadings
+plot(load, type="n") 
+text(load, labels=colnames(pl_data), cex=.7)
+```
+We can see that using PCA, ICA or FA, we can reduce the data to 2 components.

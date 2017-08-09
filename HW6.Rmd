@@ -1,0 +1,376 @@
+---
+title: "HW 6"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Load required packages:
+```{r}
+library(rvest)
+library(factoextra)
+library(graphics)
+library(ggplot2)
+library(e1071)
+library(class)
+library(reshape2)
+library(GGally)
+library(gmodels)
+```
+
+# Q1 Traumatic Brain injury
+Use the kNN algorithm to provide a classification of the TBI SOCR data. DIchotomize the field.gcs outcome variable by field.gcs>=7. Determine an appropriate kk, train and evaluate the performance of the classification model on the data. Report some model quality statistics for a couple of different values of kk, and use these to rank-order (and perhaps plot the classification results of) the models.
+
+First load the TBI SOCR data:
+```{r}
+wiki_url = read_html("http://wiki.socr.umich.edu/index.php/SOCR_Data_N46_TBI_ROI_Volumes")
+html_nodes(wiki_url, "#content")
+tbi = html_table(html_nodes(wiki_url, "table")[[1]])
+tbi = data.frame(tbi)
+colnames(tbi) = tbi[1,]
+tbi = tbi[-1,]
+```
+
+```{r}
+str(tbi)
+```
+
+Need to convert them into numeric:
+```{r}
+tbi = as.data.frame(apply(tbi[,1:18],2, function(x) as.numeric(x)))
+```
+
+Then dichotomize the field.gcs outcome variable by field.gcs>=7. Small than 7 will be 0 and greater than 7 will be 1:
+```{r}
+tbi$field.gcs[which(tbi$field.gcs < 7)] = 0
+tbi$field.gcs[which(tbi$field.gcs >= 7)] = 1
+tbi$field.gcs = as.factor(tbi$field.gcs)
+```
+
+Delete the ID column, split the training and testing sets, and define x and y:
+```{r}
+tbi = tbi[,-1]
+tbi_train = tbi[1:23,]
+tbi_test = tbi[24:31,]
+tbi_train.x = tbi_train[,-3]
+tbi_test.x = tbi_test[,-3]
+tbi_train.y = tbi_train[,3]
+tbi_test.y = tbi_test[,3]
+```
+
+Standardize data:
+```{r}
+tbi_test.xz = scale(tbi_test.x)
+tbi_train.xz = scale(tbi_train.x)
+```
+
+Determine an appropriate kk:
+```{r}
+knntuning = tune.knn(x = tbi_train.xz, y = tbi_train.y, k = 1:6)
+summary(knntuning)
+```
+
+Choose k = 1.
+Train and evaluate the performance of the classification model on the data:
+```{r}
+tbi.knn1 = knn(train=tbi_train.xz, test=tbi_test.xz, cl=tbi_train.y, k=1)
+CrossTable(x=tbi_test.y, y=tbi.knn1, prop.chisq = F)
+```
+
+Report some model quality statistics for a couple of different values of k.
+k = 2:
+```{r}
+tbi.knn2 = knn(train=tbi_train.xz, test=tbi_test.xz, cl=tbi_train.y, k=2)
+CrossTable(x=tbi_test.y, y=tbi.knn2, prop.chisq = F)
+```
+
+k = 3:
+```{r}
+tbi.knn3 = knn(train=tbi_train.xz, test=tbi_test.xz, cl=tbi_train.y, k=3)
+CrossTable(x=tbi_test.y, y=tbi.knn3, prop.chisq = F)
+```
+
+k = 4:
+```{r}
+tbi.knn4 = knn(train=tbi_train.xz, test=tbi_test.xz, cl=tbi_train.y, k=4)
+CrossTable(x=tbi_test.y, y=tbi.knn4, prop.chisq = F)
+```
+
+ = 5:
+```{r}
+tbi.knn5 = knn(train=tbi_train.xz, test=tbi_test.xz, cl=tbi_train.y, k=5)
+CrossTable(x=tbi_test.y, y=tbi.knn5, prop.chisq = F)
+```
+
+Visualize the error rate against the value of k (modified from the code in the note):
+```{r}
+cv_partition <- function(y, num_folds = 10, seed = NULL) {
+  if(!is.null(seed)) {
+    set.seed(seed)
+  }
+  n <- length(y)
+
+  folds <- split(sample(seq_len(n), n), gl(n = num_folds, k = 1, length = n))
+  folds <- lapply(folds, function(fold) {
+    list(
+      training = which(!seq_along(y) %in% fold),
+      test = fold
+    )
+  })
+  names(folds) <- paste0("Fold", names(folds))
+  return(folds)
+}
+
+# Generate 5-folds of the data
+folds = cv_partition(tbi_train.y, num_folds = 5)
+
+# Define a trainingset_CV_error calculation function
+train_cv_error_tbi = function(K) {
+  #Train error
+  knnbt = knn(train = tbi_train.xz, test = tbi_train.xz, 
+                 cl = tbi_train.y, k = K)
+  train_error = mean(knnbt != tbi_train.y)
+
+  #CV error
+  cverrbt = sapply(folds, function(fold) {
+    mean(tbi_train.y[fold$test] != knn(train = tbi_train.xz[fold$training,], cl = tbi_train.y[fold$training], 
+                                       test = tbi_train.xz[fold$test,], k=K))
+    }
+  )
+
+  cv_error = mean(cverrbt)
+
+  #Test error
+  knn.test = knn(train = tbi_train.xz, test = tbi_test.xz, 
+            cl = tbi_train.y, k = K)
+  test_error = mean(knn.test != tbi_test.y)
+  return(c(train_error, cv_error, test_error))
+}
+
+k_err = sapply(1:15, function(k) train_cv_error_tbi(k))
+df_errs = data.frame(t(k_err), 1:15)
+colnames(df_errs) = c('Train', 'CV', 'Test', 'K')
+
+dataL <- melt(df_errs, id="K")
+ggplot(dataL, aes_string(x="K", y="value", colour="variable",
+   group="variable", linetype="variable", shape="variable")) +
+   geom_line(size=0.8) + labs(x = "Number of nearest neighbors (k)",
+           y = "Classification error",
+           colour="", group="",
+           linetype="", shape="") +
+  geom_point(size=2.8)
+```
+
+# Q2 Parkinson’s Disease
+Import data:
+```{r}
+setwd('C:/Users/Xylthx/Desktop/HS650/HW6')
+pd = read.csv('05_PPMI_top_UPDRS_Integrated_LongFormat.csv')
+```
+# 2.1 KNN Classification in a High Dimension Space
+Process data: delete the Index and FID_IID VisitID column; convert the response variable ResearchGroup to bipolar factor(consider SWEDD as disease).
+```{r}
+pd = subset(pd, select = -c(Index,FID_IID,VisitID))
+pd$ResearchGroup[which(pd$ResearchGroup == 'SWEDD')] = 'PD'
+pd$ResearchGroup = factor(pd$ResearchGroup)
+table(pd$ResearchGroup)
+```
+
+Detect NA values:
+```{r}
+anyNA(pd)
+```
+
+So no NA in the data frame.
+Summarize the dataset.
+Use str:
+```{r}
+str(pd)
+```
+
+Use summary:
+```{r}
+summary(pd)
+```
+
+Use cor:
+```{r}
+cor(pd[,-31])[1:10,1:10]
+```
+
+Use ggpairs:
+```{r}
+ggpairs(pd[,1:5])
+```
+
+Data Transformation: scale/normalize the data: log(x-min(x)) and discretize either 0 or 1 (smaller than mean is 0 and others is 1).
+```{r}
+logscale = function(x){
+  log(x-min(x))
+}
+
+pd.xs = pd[,-31]
+
+for(i in c(1:67)){
+  a = logscale(pd.xs[,i])
+  pd.xs[which(a < mean(a[a!=-Inf])),i] = 0
+  pd.xs[which(a >= mean(a[a!=-Inf])),i] = 1
+}
+
+summary(pd.xs)
+```
+
+Randomly partition the data into training and testing sets: use set.seed and random sample, train:test=2:1.
+```{r}
+set.seed(1)
+trind = sample(1:661, 441, replace = F)
+pd_train.xs = pd.xs[trind,]
+pd_test.xs = pd.xs[-trind,]
+pd_train.y = pd[trind,31]
+pd_test.y = pd[-trind,31]
+```
+
+Select an optimized k for each of the scaled data above: Show an error plot for k including three lines: train error, cross validation error and test error.
+```{r}
+# Generate 10-folds of the data
+folds = cv_partition(pd_train.y, num_folds = 10)
+
+# Define a trainingset_CV_error calculation function
+train_cv_error_pd = function(K) {
+  #Train error
+  knnpd = knn(train = pd_train.xs, test = pd_train.xs, 
+                 cl = pd_train.y, k = K)
+  train_error = mean(knnpd != pd_train.y)
+
+  #CV error
+  cverrpd = sapply(folds, function(fold) {
+    mean(pd_train.y[fold$test] != knn(train = pd_train.xs[fold$training,], cl = pd_train.y[fold$training], 
+                                       test = pd_train.xs[fold$test,], k=K))
+    }
+  )
+
+  cv_error = mean(cverrpd)
+
+  #Test error
+  knn.test = knn(train = pd_train.xs, test = pd_test.xs, 
+            cl = pd_train.y, k = K)
+  test_error = mean(knn.test != pd_test.y)
+  return(c(train_error, cv_error, test_error))
+}
+
+k_err = sapply(1:30, function(k) train_cv_error_pd(k))
+df_errs = data.frame(t(k_err), 1:30)
+colnames(df_errs) = c('Train', 'CV', 'Test', 'K')
+
+dataL <- melt(df_errs, id="K")
+ggplot(dataL, aes_string(x="K", y="value", colour="variable",
+   group="variable", linetype="variable", shape="variable")) +
+   geom_line(size=0.8) + labs(x = "Number of nearest neighbors (k)",
+           y = "Classification error",
+           colour="", group="",
+           linetype="", shape="") +
+  geom_point(size=2.8)
+```
+
+Select k = 3.
+Hypothesize that for training set, generally as k increase the error increases, but there is a optimal k in the middle. Best k for the trainig set does not really mean the best k for the model, as when k is small the model tends to overfit. We can check this with tune.knn:
+```{r}
+knntuning = tune.knn(x = pd_train.xs, y = pd_train.y, k = 1:30)
+summary(knntuning)
+```
+
+The errors of the training and testing sets are shown in the figure above. We can see that when k is small it will overfit and when k is large the performance of the model is bad.
+
+Then try above again but for a smaller subset of the data frame:
+```{r}
+pdsub = pd[,c(31,40,46,47,53,54,60)]
+
+pdsub.xs = pdsub[,-1]
+
+for(i in c(1:6)){
+  a = logscale(pdsub.xs[,i])
+  pdsub.xs[which(a < mean(a[a!=-Inf])),i] = 0
+  pdsub.xs[which(a >= mean(a[a!=-Inf])),i] = 1
+}
+
+summary(pdsub.xs)
+```
+
+```{r}
+set.seed(1)
+trind = sample(1:661, 441, replace = F)
+pdsub_train.xs = pdsub.xs[trind,]
+pdsub_test.xs = pdsub.xs[-trind,]
+pdsub_train.y = pdsub[trind,1]
+pdsub_test.y = pdsub[-trind,1]
+
+# Generate 10-folds of the data
+folds = cv_partition(pdsub_train.y, num_folds = 10)
+
+train_cv_error_sub = function(K) {
+  #Train error
+  knnpd = knn(train = pdsub_train.xs, test = pdsub_train.xs, 
+                 cl = pdsub_train.y, k = K)
+  train_error = mean(knnpd != pdsub_train.y)
+
+  #CV error
+  cverrpd = sapply(folds, function(fold) {
+    mean(pdsub_train.y[fold$test] != knn(train = pdsub_train.xs[fold$training,], 
+                                         cl = pdsub_train.y[fold$training], 
+                                       test = pdsub_train.xs[fold$test,], k=K))
+    }
+  )
+
+  cv_error = mean(cverrpd)
+
+  #Test error
+  knn.test = knn(train = pdsub_train.xs, test = pdsub_test.xs, 
+            cl = pdsub_train.y, k = K)
+  test_error = mean(knn.test != pdsub_test.y)
+  return(c(train_error, cv_error, test_error))
+}
+
+k_err = sapply(1:30, function(k) train_cv_error_sub(k))
+df_errs = data.frame(t(k_err), 1:30)
+colnames(df_errs) = c('Train', 'CV', 'Test', 'K')
+
+dataL <- melt(df_errs, id="K")
+ggplot(dataL, aes_string(x="K", y="value", colour="variable",
+   group="variable", linetype="variable", shape="variable")) +
+   geom_line(size=0.8) + labs(x = "Number of nearest neighbors (k)",
+           y = "Classification error",
+           colour="", group="",
+           linetype="", shape="") +
+  geom_point(size=2.8)
+```
+
+```{r}
+knntuning = tune.knn(x = pd_train.xs, y = pd_train.y, k = 1:30)
+summary(knntuning)
+```
+
+Compared to the full data, a slightly smaller k is more optimal.
+The analysis above is only done for a log-transformed data after a discretization. Other transformations can be done and the code is provided below:
+```{r}
+# pd_norm.x = scale(pd[,-31]) # normalization
+# pd_log.x = logscale(pd[,-31]) # log-transformation
+# A binary transformation can also be done with a for loop with a ifelse inside.
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
