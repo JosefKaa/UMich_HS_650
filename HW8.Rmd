@@ -1,0 +1,154 @@
+---
+title: "HW8"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+library(rvest)
+library(rpart)
+library(rattle)
+library(C50)
+library(caret)
+library(RWeka)
+library(randomForest)
+```
+
+# 1 Explain these concepts:
+Information Gain Measure is used to select the test attribute at each node in the tree. The best split decision maximize the information gain.
+
+Impurity means a data table contains several classes.
+
+Entropy measures the amount of disorder or uncertainty in a system. In classification context, higher entropy corresponds to a sample with a mixed collection of labels.
+
+Gini index is a measure of how often a randomly chosen element from the set would be incorrectly labeled if it was randomly labeled according to the distribution of labels in the subset. It is used to evaluate the information gain.
+
+# 2 Decision Tree Partitioning
+Load the SOCR Neonatal Infant Pain score data:
+```{r}
+wiki_url = read_html("http://wiki.socr.umich.edu/index.php/SOCR_Data_NIPS_InfantVitK_ShotData")
+html_nodes(wiki_url, "#content")
+ip = html_table(html_nodes(wiki_url, "table")[[1]])
+str(ip)
+```
+Collect and preprocessing the data, e.g., data conversion and variable selection.
+```{r}
+ip = ip[,-1] # remove the first column (index)
+ip = ip[,-7] # remove the automatic cluster
+
+ip$group = ip$Group_NC1_Interv2 == 2
+ip$group = factor(ip$group, levels=c(F, T), labels = c("NC", "Int"))
+ip = ip[,-1]
+```
+Randomly split the data into training and testing sets.
+```{r}
+set.seed(2017)
+train_index = sample(seq_len(nrow(ip)), size = 0.8*nrow(ip))
+ip_train = ip[train_index, ]
+ip_test = ip[-train_index, ]
+```
+Train decision tree models on the data using C5.0.
+```{r}
+set.seed(2017)
+ip_model = C5.0(ip_train[,-6], ip_train$group)
+ip_model
+```
+```{r}
+summary(ip_model)
+```
+Train decision tree models on the data using rpart.
+```{r}
+ip_rpart = rpart(group~., data=ip_train)
+print(ip_rpart)
+```
+Evaluate and compare the two models.
+Evaluate C50:
+```{r}
+ip_pred = predict(ip_model, ip_test[ ,-6])
+confusionMatrix(table(ip_pred, ip_test$group))
+```
+Evaluate rpart:
+```{r}
+ip_predrp = predict(ip_rpart, ip_test,type = 'class')
+confusionMatrix(table(ip_predrp, ip_test$group))
+```
+We can see that C50 outperforms rpart in terms of accuracy.
+
+Tune the rpart parameter and repeat the evaluation and comparison again.
+```{r}
+set.seed(2017)
+control = rpart.control(cp = 0.000, xxval = 100, minsplit = 2)
+ip_model1 = rpart(group ~ ., data = ip_train, control = control)
+plotcp(ip_model1)
+```
+```{r}
+printcp(ip_model1)
+```
+Assess the prediction accuracy and report the confusion matrix.
+```{r}
+set.seed(2017)
+selected_tr = prune(ip_model1, cp = ip_model1$cptable[which.min(ip_model1$cptable[,"xerror"]),"CP"])
+ip_pred_tune = predict(selected_tr, ip_test, type = 'class')
+confusionMatrix(table(ip_pred_tune, ip_test$group))
+```
+We can see that the performance improves to the same as C50. Also, notice that the results all show a poor sensitivity and a good specificity.
+
+Use various impurity measures and re-estimate the models.
+Use entropy:
+```{r}
+set.seed(2017)
+ip_model2 = rpart(group ~ ., data=ip_train, parms = list(split = "entropy"))
+ip_pred2 = predict(ip_model2, ip_test,type = 'class')
+confusionMatrix(table(ip_pred2, ip_test$group))
+```
+Use Gini:
+```{r}
+set.seed(2017)
+ip_model3 = rpart(group ~ ., data=ip_train, parms = list(split = "gini"))
+ip_pred3 = predict(ip_model3, ip_test,type = 'class')
+confusionMatrix(table(ip_pred3, ip_test$group))
+```
+Use error:
+```{r}
+set.seed(2017)
+ip_model4 = rpart(group ~ ., data=ip_train, parms = list(split = "error"))
+ip_pred4 = predict(ip_model4, ip_test,type = 'class')
+confusionMatrix(table(ip_pred4, ip_test$group))
+```
+Different impurity indices give very similar results.
+
+Try to use the RWeka package to train decision models and compare the results.
+```{r}
+set.seed(2017)
+ip_1R = OneR(group ~., data = ip_train)
+ip_1R
+```
+```{r}
+ip_pred1R = predict(ip_1R, ip_test, type = 'class')
+confusionMatrix(table(ip_pred1R, ip_test$group))
+```
+We can see the performance is better than rpart without tuning and worse than C50. Also the result is more balanced (especially better sensitivity).
+
+Try to apply Random Forest and obtain variables importance plot.
+```{r}
+set.seed(2017)
+rf.fit = randomForest(x = ip_train[,-6], y = ip_train[,6], importance=TRUE,ntree=2000,mtry=3)
+print(rf.fit)
+```
+```{r}
+varImpPlot(rf.fit, cex=0.5)
+```
+```{r}
+ip_predrf = predict(rf.fit, ip_test, type = 'class')
+confusionMatrix(table(ip_predrf, ip_test$group))
+```
+We can see the overall accuracy is better than rpart without tuning and worse than C50, similar to OneRule. However, the sensitivity and specificity are more balanced.
+
+
+
+
+
+

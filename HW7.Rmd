@@ -1,0 +1,161 @@
+---
+title: "HW7"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(rvest)
+library(factoextra)
+library(graphics)
+library(ggplot2)
+library(e1071)
+library(class)
+library(reshape2)
+library(GGally)
+library(gmodels)
+library(tm)
+library(wordcloud)
+library(MASS)
+```
+
+# 1 Explain these two concepts
+Bayes Theorem:
+The posterior distribution equals to the likelihood multiplies the prior distribution divided by the marginal likelihood.
+Laplace Estimation:
+Laplace estimation is a way to smooth categorical data. It adds a small number to each count in the frequency table, or adds a small number to the numerator and denumerator to avoid the 0 posterior caused by random sampling.
+
+# 2 Processing text data for analysis
+Load the SOCR 2011 US Job Satisfaction data. The last column (Description) contains free text about each job. Notice that white spaces are replaced by underscores, __. Mine this text field and suggest some meta-data analytics. Convert the textual meta-data into a corpus object. Triage some of the irrelevant punctuation and other symbols in the corpus document, change all text to lower case, etc.
+```{r}
+wiki_url = read_html("http://wiki.socr.umich.edu/index.php/SOCR_Data_2011_US_JobsRanking#2011_Ranking_of_the_200_most_common_Jobs_in_the_US")
+html_nodes(wiki_url, "#content")
+job = html_table(html_nodes(wiki_url, "table")[[1]])
+```
+
+```{r}
+job$Description = gsub('_', " ", job$Description) # replace underscores to spaces
+job_corpus = Corpus(VectorSource(job$Description))
+print(job_corpus)
+```
+The corpus object:
+```{r}
+inspect(job_corpus[1:3])
+```
+Then clean the corpus:
+```{r}
+corpus_clean = tm_map(job_corpus, tolower)
+corpus_clean = tm_map(corpus_clean, removePunctuation)
+corpus_clean = tm_map(corpus_clean, stripWhitespace)
+corpus_clean = tm_map(corpus_clean, removeNumbers)
+#corpus_clean = tm_map(corpus_clean, removeWords, stopwords('english')) #remove stopwords
+
+inspect(corpus_clean[1:3])
+```
+Tokenize the job descriptions into words and report the sparsity of word matrix.
+```{r}
+job_dtm = DocumentTermMatrix(corpus_clean)
+print(job_dtm)
+```
+Seperate into training and test sets.
+```{r}
+set.seed(10)
+subset_int = sample(nrow(job),floor(nrow(job)*0.8))  # 80% training + 20% testing
+job_train = job[subset_int, ]
+job_test = job[-subset_int, ]
+job_dtm_train = job_dtm[subset_int, ]
+job_dtm_test = job_dtm[-subset_int, ]
+corpus_train = corpus_clean[subset_int]
+corpus_test = corpus_clean[-subset_int]
+```
+Examine the distributions of Stress_Level and Overall_Score.
+```{r}
+hist(job_train$Stress_Level,20)
+```
+```{r}
+hist(job_train$Overall_Score,20)
+```
+Label the Stress_Level and Overall_Score into two categories, by the medians.
+```{r}
+job_train$stress = job_train$Stress_Level < median(job_train$Stress_Level)
+job_train$stress = factor(job_train$stress, levels=c(F, T), labels = c("low", "high"))
+job_test$stress = job_test$Stress_Level < median(job_test$Stress_Level)
+job_test$stress = factor(job_test$stress, levels=c(F, T), labels = c("low", "high"))
+prop.table(table(job_train$stress))
+```
+```{r}
+job_train$overall = job_train$Overall_Score < median(job_train$Overall_Score)
+job_train$overall = factor(job_train$overall, levels=c(F, T), labels = c("low", "high"))
+job_test$overall = job_test$Overall_Score < median(job_test$Overall_Score)
+job_test$overall = factor(job_test$overall, levels=c(F, T), labels = c("low", "high"))
+prop.table(table(job_train$overall))
+```
+Generate a word cloud to visualize the job description text.
+```{r}
+wordcloud(corpus_train, min.freq = 10, random.order = FALSE)
+```
+Visualize the differences between low and high Stress_Level:
+```{r}
+low = subset(job_train, stress=="low")
+high = subset(job_train, stress=="high")
+wordcloud(low$Description, max.words = 10)
+```
+```{r}
+wordcloud(high$Description, max.words = 10)
+```
+Visualize the differences between low score (high rank jobs) and high scores (jobs of poor ranking):
+```{r}
+lowsc = subset(job_train, overall=="low")
+highsc = subset(job_train, overall=="high")
+wordcloud(lowsc$Description, max.words = 10)
+```
+```{r}
+wordcloud(highsc$Description, max.words = 10)
+```
+Ignore low frequency words and report the sparsity of your categorical data matrix before and after deleting the low frequency words.
+```{r}
+summary(findFreqTerms(job_dtm_train, 5))
+```
+```{r}
+job_dict = as.character(findFreqTerms(job_dtm_train, 5))
+j_train = DocumentTermMatrix(corpus_train, list(dictionary=job_dict))
+j_test = DocumentTermMatrix(corpus_test, list(dictionary=job_dict))
+```
+Transform the word count features into binary data.
+```{r}
+convert_counts = function(x) {
+x = ifelse(x > 0, 1, 0)
+x = factor(x, levels = c(0, 1), labels = c("No", "Yes"))
+return(x)
+}
+
+j_train = apply(j_train, MARGIN = 2, convert_counts)
+j_test = apply(j_test, MARGIN = 2, convert_counts)
+```
+Apply the Naive Bayes classifier using a binaryzed version of the job overall ranking score as outcome. What do you find?
+```{r}
+j_classifier = naiveBayes(j_train, job_train$overall)
+j_test_pred = predict(j_classifier, j_test)
+
+CrossTable(j_test_pred, job_test$overall)
+```
+So the prediction accuracy is 0.65.
+
+Apply LDA, and compare with Naive Bayes with respect to the classification error, specificity and sensitivity.
+```{r}
+df_j_train = data.frame(lapply(as.data.frame(j_train),as.numeric), sc = job_train$overall)
+df_j_test = data.frame(lapply(as.data.frame(j_test),as.numeric), sc = job_test$overall)
+
+j_lda = lda(data=df_j_train, sc~.)
+
+j_pred = predict(j_lda, df_j_test[,-57])
+CrossTable(j_pred$class, df_j_test$sc)
+```
+Here, LDA outperforms Naive Bayes in terms of overall accuracy a little bit.
+
+
+
+
